@@ -5,6 +5,7 @@
 
 import hashlib
 import sqlite3
+import random
 import flask
 import os
 
@@ -45,7 +46,7 @@ def checks() -> None:
     exists = cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").fetchall()
 
     if not exists:
-        cursor.execute("CREATE TABLE users (username text, password text)")
+        cursor.execute("CREATE TABLE users (username text, password text, auth_token str)")
         connection.commit()
     
     print(":checks: passed the checks")
@@ -57,8 +58,8 @@ def authenticate_user(username: str, password: str) -> int:
     :username: string
     :password: string
 
-    0: if the credentials are correct
-    1: if the credentials are incorrect
+    0, auth_token: if the credentials are correct
+    1, None: if the credentials are incorrect
     """
     connection = sqlite3.connect(DB_FILE)
     cursor = connection.cursor()
@@ -68,8 +69,15 @@ def authenticate_user(username: str, password: str) -> int:
     # Chceks whether the credentials find a match in the database
     check = cursor.execute(f"SELECT username FROM users WHERE username='{username}' and password='{hashed_password}'").fetchall()
 
+    if not check:
+        connection.close()
+        return 1, None
+
+    auth_token = hashlib.sha256(str(random.randint(0, 10000)).encode()).hexdigest()
+    cursor.execute(f"UPDATE users SET auth_token='{auth_token}' WHERE username='{username}' AND password='{hashed_password}'")
     connection.close()
-    return (0 if check else 1)
+
+    return 0, auth_token
 
 def insert_user(username: str, password: str) -> int:
     """
@@ -89,15 +97,16 @@ def insert_user(username: str, password: str) -> int:
 
     if exists:
         connection.close()
-        return 1
+        return 1, None
 
     hashed_password = hashlib.sha256(password.encode()).hexdigest()
-    cursor.execute(f"INSERT INTO users (username, password) VALUES ('{username}', '{hashed_password}')")
+    auth_token = hashlib.sha256(str(random.randint(0, 10000)).encode()).hexdigest()
+    cursor.execute(f"INSERT INTO users (username, password, auth_token) VALUES ('{username}', '{hashed_password}', '{auth_token}')")
     connection.commit()
 
-    print(f":insert_user: inserted {username}")
+    print(f":insert_user: inserted {username}, token: {auth_token}")
     connection.close()
-    return 0
+    return 0, auth_token
 
 def delete_user(username: str, password: str) -> int:
     """
@@ -150,23 +159,29 @@ def authenticate() -> dict:
         return error_response
 
     elif _type == "login":
-        response = authenticate_user(username, password)
+        response, token = authenticate_user(username, password)
         if response == 0:
-            return success_response
+            return flask.jsonify({
+                "response": "success",
+                "auth_token": token
+            })
         elif response == 1:
             return flask.jsonify({ "response": "invalid credentials" })
 
     elif _type == "register":
-        response = insert_user(username, password)
+        response, token = insert_user(username, password)
         if response == 0:
-            return success_response
+            return flask.jsonify({
+                "response": "success",
+                "auth_token": token
+            })
         elif response == 1:
             return flask.jsonify({ "response": "username is already taken" })
 
     elif _type == "delete" == 0:
         response = delete_user(username, password)
         if response:
-            return success_response
+            return flask.jsonify({ "response": "success" })
         elif response == 1:
             return flask.jsonify({ "response": "username does not exist or incorrect password" })
 
